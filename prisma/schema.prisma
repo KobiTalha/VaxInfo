@@ -1,0 +1,50 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Disease {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  aliases   String[]  @default([])
+  category  String    @default("unknown")
+  vaccines  Vaccine[]
+}
+
+model Vaccine {
+  id               Int     @id @default(autoincrement())
+  diseaseId        Int
+  name             String
+  type             String
+  doses            String  @default("N/A")
+  coveragePercent  Float?
+  region           String?
+  introductionYear Int?
+  disease          Disease @relation(fields: [diseaseId], references: [id], onDelete: Cascade)
+}
+
+model ChatSession {
+  id        String        @id @default(cuid())
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  messages  ChatMessage[]
+}
+
+model ChatMessage {
+  id        String      @id @default(cuid())
+  sessionId String
+  role      String
+  content   String
+  kind      String?
+  disease   String?
+  score     Float?
+  createdAt DateTime    @default(now())
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+}
