@@ -73,6 +73,11 @@ export const authOptions: NextAuthOptions = {
   }
 };
 
-export function getAuthSession() {
-  return getServerSession(authOptions);
+export async function getAuthSession() {
+  try {
+    return await getServerSession(authOptions);
+  } catch {
+    // If auth config or adapter access fails, treat request as anonymous.
+    return null;
+  }
 }
