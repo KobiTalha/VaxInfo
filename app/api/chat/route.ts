@@ -1,34 +1,38 @@
+import { getAuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { guardApiRequest, trackApiUsage } from "@/lib/server/api-platform";
+import { logServerError } from "@/lib/server/error-log";
+import { recordSearchLog } from "@/lib/server/search-analytics";
+import {
+    buildRecommendationAnswer,
+    detectIntent,
+    detectRecommendationKind,
+    extractRegionHint,
+    formatSeverityTag,
+    matchDiseasesFromQuery,
+    normalizeText,
+    type SearchDiseaseRecord
+} from "@/lib/server/search-intelligence";
 import Fuse from "fuse.js";
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-type VaccineRecord = {
-  id: number;
-  name: string;
-  type: string;
-  doses: string;
-  coveragePercent: number | null;
-  region: string | null;
-  introductionYear: number | null;
-};
-
-type DiseaseRecord = {
-  id: number;
-  name: string;
-  aliases: string[];
-  category: string;
-  vaccines: VaccineRecord[];
-};
-
-type AssistantKind = "greeting" | "disease" | "analytics" | "fallback";
+type AssistantKind =
+  | "greeting"
+  | "disease"
+  | "explanation"
+  | "recommendation"
+  | "analytics"
+  | "multi"
+  | "fallback";
 
 type ChatAssistantPayload = {
   answer: string;
   kind: AssistantKind;
   disease?: string;
   score?: number | null;
+  matchedDiseaseIds?: number[];
 };
 
 type ChatRequestBody = {
@@ -48,31 +52,7 @@ const WHO_REGIONS = [
 const GREETING_WORDS = ["hi", "hello", "hey", "yo", "hola"];
 
 const INTRO_MESSAGE =
-  "I am your vaccine assistant. Ask me about a disease, coverage, top vaccines, or region-specific insights.";
-
-const STOP_WORDS = new Set([
-  "a",
-  "an",
-  "about",
-  "any",
-  "can",
-  "do",
-  "for",
-  "give",
-  "how",
-  "i",
-  "in",
-  "is",
-  "me",
-  "of",
-  "on",
-  "show",
-  "tell",
-  "the",
-  "to",
-  "what",
-  "with"
-]);
+  "I am your vaccine assistant. Ask me about diseases, vaccine schedules, side effects, travel recommendations, or regional coverage insights.";
 
 function average(values: number[]) {
   if (values.length === 0) {
@@ -87,73 +67,29 @@ function findRegionInPrompt(prompt: string) {
   return WHO_REGIONS.find((region) => lower.includes(region)) ?? null;
 }
 
-function normalizeText(input: string) {
-  return input
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+function sanitizeSessionId(sessionId: string | null | undefined) {
+  const cleaned = sessionId?.trim();
+  return cleaned ? cleaned : null;
 }
 
-function resolveDiseaseFromMessage(message: string, diseases: DiseaseRecord[]) {
-  const normalizedMessage = normalizeText(message);
-  if (!normalizedMessage) {
-    return null;
+function getBoundedHistoryLimit(request: NextRequest) {
+  const value = Number(request.nextUrl.searchParams.get("limit") ?? "50");
+
+  if (!Number.isFinite(value)) {
+    return 50;
   }
 
-  const paddedMessage = ` ${normalizedMessage} `;
-  let bestMatch: { disease: DiseaseRecord; overlapScore: number } | null = null;
-
-  for (const disease of diseases) {
-    const candidates = [disease.name, ...disease.aliases]
-      .map((name) => normalizeText(name))
-      .filter(Boolean);
-
-    for (const candidate of candidates) {
-      if (candidate.length < 3) {
-        continue;
-      }
-
-      if (paddedMessage.includes(` ${candidate} `)) {
-        return disease;
-      }
-
-      const candidateTokens = candidate.split(" ").filter((token) => token.length >= 3);
-      const overlapCount = candidateTokens.filter((token) => paddedMessage.includes(` ${token} `)).length;
-
-      if (overlapCount === 0 || candidateTokens.length === 0) {
-        continue;
-      }
-
-      const overlapScore = overlapCount / candidateTokens.length;
-
-      if (!bestMatch || overlapScore > bestMatch.overlapScore) {
-        bestMatch = { disease, overlapScore };
-      }
-    }
-  }
-
-  return bestMatch && bestMatch.overlapScore >= 0.6 ? bestMatch.disease : null;
+  return Math.min(100, Math.max(1, Math.floor(value)));
 }
 
-function extractSearchQueries(message: string) {
-  const normalized = normalizeText(message);
-  const tokenQuery = normalized
-    .split(" ")
-    .filter((token) => token.length >= 3 && !STOP_WORDS.has(token))
-    .join(" ");
-
-  return [...new Set([message, normalized, tokenQuery].filter(Boolean))];
-}
-
-function buildDiseaseAnswer(disease: DiseaseRecord, allDiseases: DiseaseRecord[]) {
+function buildDiseaseAnswer(disease: SearchDiseaseRecord, allDiseases: SearchDiseaseRecord[]) {
   if (disease.vaccines.length === 0) {
     return `${disease.name} currently has no approved vaccine in this WHO-structured dataset.`;
   }
 
   const vaccineSummary = disease.vaccines
     .map((vaccine) => {
-      const detailParts = [vaccine.type, vaccine.doses];
+      const detailParts = [vaccine.type, vaccine.doses, `age: ${vaccine.ageGroup}`];
       if (vaccine.coveragePercent !== null) {
         detailParts.push(`${vaccine.coveragePercent}% coverage`);
       }
@@ -164,15 +100,15 @@ function buildDiseaseAnswer(disease: DiseaseRecord, allDiseases: DiseaseRecord[]
     })
     .join("; ");
 
-  const vaccineNameSet = new Set(disease.vaccines.map((vaccine) => vaccine.name.toLowerCase()));
   const relatedDiseases = allDiseases
-    .filter(
-      (candidate) =>
-        candidate.id !== disease.id &&
-        candidate.vaccines.some((candidateVaccine) =>
-          vaccineNameSet.has(candidateVaccine.name.toLowerCase())
-        )
-    )
+    .filter((candidate) => {
+      if (candidate.id === disease.id) {
+        return false;
+      }
+
+      const vaccineSet = new Set(disease.vaccines.map((vaccine) => vaccine.name.toLowerCase()));
+      return candidate.vaccines.some((candidateVaccine) => vaccineSet.has(candidateVaccine.name.toLowerCase()));
+    })
     .map((candidate) => candidate.name)
     .slice(0, 3);
 
@@ -181,15 +117,31 @@ function buildDiseaseAnswer(disease: DiseaseRecord, allDiseases: DiseaseRecord[]
       ? ` Related diseases by shared vaccine: ${relatedDiseases.join(", ")}.`
       : "";
 
-  const aliasText =
-    disease.aliases.length > 0
-      ? ` Known aliases: ${disease.aliases.join(", ")}.`
-      : "";
+  const severity = formatSeverityTag(disease.severity, disease.mandatory);
+  const mandatoryText = disease.mandatory ? " Mandatory status: yes." : "";
 
-  return `For ${disease.name}, vaccine options include ${vaccineSummary}.${aliasText}${relatedText}`;
+  return `For ${disease.name} (${severity}), vaccine options include ${vaccineSummary}.${mandatoryText}${relatedText}`;
 }
 
-function buildAnalyticsAnswer(diseases: DiseaseRecord[], prompt: string) {
+function buildExplanationAnswer(disease: SearchDiseaseRecord) {
+  const severity = formatSeverityTag(disease.severity, disease.mandatory);
+
+  if (disease.vaccines.length === 0) {
+    return `${disease.name} is tracked as ${severity}, but this dataset currently has no approved vaccine entry for it.`;
+  }
+
+  const rationale = disease.vaccines
+    .slice(0, 2)
+    .map(
+      (vaccine) =>
+        `${vaccine.name} is used because it targets ${disease.name} with ${vaccine.vaccineType.toUpperCase()} technology and follows ${vaccine.dosageSchedule}`
+    )
+    .join(". ");
+
+  return `${disease.name} is considered ${severity}. ${rationale}. Protection helps lower severe outcomes and transmission risk.`;
+}
+
+function buildAnalyticsAnswer(diseases: SearchDiseaseRecord[], prompt: string) {
   const selectedRegion = findRegionInPrompt(prompt);
 
   const relevantVaccines = selectedRegion
@@ -228,14 +180,6 @@ function buildAnalyticsAnswer(diseases: DiseaseRecord[], prompt: string) {
       ).length
     : diseases.filter((disease) => disease.vaccines.length > 0).length;
 
-  const categoryCounts = new Map<string, number>();
-  for (const disease of diseases) {
-    const current = categoryCounts.get(disease.category) ?? 0;
-    categoryCounts.set(disease.category, current + 1);
-  }
-
-  const topCategory = [...categoryCounts.entries()].sort((a, b) => b[1] - a[1])[0];
-
   const topVaccineText =
     topVaccines.length > 0
       ? topVaccines
@@ -247,74 +191,106 @@ function buildAnalyticsAnswer(diseases: DiseaseRecord[], prompt: string) {
     ? ` in ${selectedRegion.replace(/\b\w/g, (char) => char.toUpperCase())}`
     : " globally";
 
-  return `Analytics snapshot${regionText}: average coverage is ${avgCoverage.toFixed(1)}%, vaccine availability spans ${availableDiseaseCount}/${diseases.length} diseases, top coverage vaccines are ${topVaccineText}. Dominant disease category is ${topCategory?.[0] ?? "unknown"}.`;
+  return `Analytics snapshot${regionText}: average coverage is ${avgCoverage.toFixed(1)}%, vaccine availability spans ${availableDiseaseCount}/${diseases.length} diseases, top coverage vaccines are ${topVaccineText}.`;
 }
 
-function buildAssistantPayload(message: string, diseases: DiseaseRecord[]): ChatAssistantPayload {
-  const lowerMessage = message.toLowerCase();
+function splitUserPrompt(message: string) {
+  const fromQuestions = message
+    .split(/[?]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
 
-  if (GREETING_WORDS.some((word) => lowerMessage === word || lowerMessage.startsWith(`${word} `))) {
-    return {
-      answer: INTRO_MESSAGE,
-      kind: "greeting"
-    };
+  if (fromQuestions.length > 1) {
+    return fromQuestions;
   }
 
-  const directDiseaseMatch = resolveDiseaseFromMessage(message, diseases);
-  if (directDiseaseMatch) {
-    return {
-      answer: buildDiseaseAnswer(directDiseaseMatch, diseases),
-      kind: "disease",
-      disease: directDiseaseMatch.name,
-      score: 0
-    };
+  const fromAnd = message
+    .split(/\s+and\s+/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return fromAnd.length > 1 ? fromAnd : [message.trim()];
+}
+
+function resolveContextDisease(
+  segment: string,
+  diseases: SearchDiseaseRecord[],
+  historyMessages: string[]
+) {
+  const direct = matchDiseasesFromQuery(segment, diseases)[0];
+  if (direct) {
+    return direct;
   }
 
-  const analyticsIntentWords = ["coverage", "analytics", "dashboard", "region", "trend", "top vaccine"];
-  const hasAnalyticsIntent = analyticsIntentWords.some((word) => lowerMessage.includes(word));
-
-  if (hasAnalyticsIntent) {
-    return {
-      answer: buildAnalyticsAnswer(diseases, message),
-      kind: "analytics"
-    };
-  }
-
-  const fuse = new Fuse(diseases, {
-    keys: ["name", "aliases", "vaccines.name", "vaccines.type", "category"],
-    includeScore: true,
-    threshold: 0.4,
-    ignoreLocation: true,
-    minMatchCharLength: 2
+  const mergedHistory = historyMessages.join(" ").toLowerCase();
+  return diseases.find((disease) => {
+    const candidates = [disease.name, ...disease.aliases].map((value) => normalizeText(value));
+    return candidates.some((candidate) => candidate && mergedHistory.includes(candidate));
   });
+}
 
-  const bestMatch = extractSearchQueries(message)
-    .map((query) => fuse.search(query, { limit: 1 })[0])
-    .filter((match): match is NonNullable<typeof match> => Boolean(match))
-    .sort((a, b) => (a.score ?? 1) - (b.score ?? 1))[0];
-
-  if (bestMatch && (bestMatch.score ?? 1) <= 0.55) {
-    return {
-      answer: buildDiseaseAnswer(bestMatch.item, diseases),
-      kind: "disease",
-      disease: bestMatch.item.name,
-      score: bestMatch.score ?? null
-    };
+async function maybeGenerateLlmResponse(input: {
+  userMessage: string;
+  baselineAnswer: string;
+  history: Array<{ role: string; content: string }>;
+}) {
+  if (process.env.VAXINFO_ENABLE_LLM !== "true") {
+    return null;
   }
 
-  return {
-    answer:
-      "I could not confidently map that request yet. Try asking with a disease name such as polio, measles, covid, flu, or ask for coverage analytics by region.",
-    kind: "fallback"
-  };
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return null;
+  }
+
+  const baseUrl = process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1";
+  const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+
+  try {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are VaxInfo assistant. Keep answers factual, concise, and vaccine-focused. Avoid medical diagnosis."
+          },
+          ...input.history.slice(-6),
+          {
+            role: "user",
+            content: `User message: ${input.userMessage}\n\nStructured baseline answer: ${input.baselineAnswer}`
+          }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as {
+      choices?: Array<{
+        message?: {
+          content?: string;
+        };
+      }>;
+    };
+
+    const content = payload.choices?.[0]?.message?.content?.trim();
+    return content || null;
+  } catch {
+    return null;
+  }
 }
 
-function sanitizeSessionId(sessionId: string | null | undefined) {
-  const cleaned = sessionId?.trim();
-  return cleaned ? cleaned : null;
-}
-
-async function getOrCreateSession(sessionId: string | null) {
+async function getOrCreateSession(sessionId: string | null, userId: string | null) {
   if (sessionId) {
     const existing = await prisma.chatSession.findUnique({
       where: {
@@ -323,23 +299,158 @@ async function getOrCreateSession(sessionId: string | null) {
     });
 
     if (existing) {
+      if (userId && !existing.userId) {
+        return prisma.chatSession.update({
+          where: {
+            id: existing.id
+          },
+          data: {
+            userId
+          }
+        });
+      }
+
+      if (userId && existing.userId && existing.userId !== userId) {
+        return prisma.chatSession.create({
+          data: {
+            userId
+          }
+        });
+      }
+
       return existing;
     }
   }
 
   return prisma.chatSession.create({
-    data: {}
+    data: {
+      userId: userId ?? undefined
+    }
   });
 }
 
-export async function GET(request: NextRequest) {
-  try {
-    const sessionId = sanitizeSessionId(request.nextUrl.searchParams.get("sessionId"));
+async function buildAssistantPayload(
+  message: string,
+  diseases: SearchDiseaseRecord[],
+  historyMessages: Array<{ role: string; content: string }>
+): Promise<ChatAssistantPayload> {
+  const lowerMessage = message.toLowerCase().trim();
 
-    if (!sessionId) {
-      return NextResponse.json({ sessionId: null, introMessage: INTRO_MESSAGE, messages: [] }, { status: 200 });
+  if (GREETING_WORDS.some((word) => lowerMessage === word || lowerMessage.startsWith(`${word} `))) {
+    return {
+      answer: INTRO_MESSAGE,
+      kind: "greeting",
+      matchedDiseaseIds: []
+    };
+  }
+
+  const segments = splitUserPrompt(message);
+  const answers: string[] = [];
+  const matchedDiseaseIds = new Set<number>();
+  let strongestKind: AssistantKind = "fallback";
+
+  for (const segment of segments) {
+    const intent = detectIntent(segment);
+    const matched = matchDiseasesFromQuery(segment, diseases);
+    const contextualDisease = resolveContextDisease(
+      segment,
+      diseases,
+      historyMessages.map((entry) => entry.content)
+    );
+
+    const selectedDisease = matched[0] ?? contextualDisease ?? null;
+
+    for (const disease of matched) {
+      matchedDiseaseIds.add(disease.id);
     }
 
+    if (intent === "analytics") {
+      answers.push(buildAnalyticsAnswer(diseases, segment));
+      strongestKind = strongestKind === "fallback" ? "analytics" : strongestKind;
+      continue;
+    }
+
+    if (intent === "recommendation") {
+      const recommendationType = detectRecommendationKind(segment);
+      const regionHint = extractRegionHint(segment);
+      const recommendationSource = matched.length > 0 ? matched : diseases;
+      answers.push(
+        buildRecommendationAnswer(recommendationType, recommendationSource.slice(0, 10), regionHint)
+      );
+      strongestKind = strongestKind === "fallback" ? "recommendation" : strongestKind;
+      continue;
+    }
+
+    if (intent === "explanation") {
+      if (selectedDisease) {
+        matchedDiseaseIds.add(selectedDisease.id);
+        answers.push(buildExplanationAnswer(selectedDisease));
+        strongestKind = strongestKind === "fallback" ? "explanation" : strongestKind;
+      } else {
+        answers.push(
+          "I can explain vaccine importance if you include a disease name, for example: Why is MMR important?"
+        );
+      }
+      continue;
+    }
+
+    if (selectedDisease) {
+      matchedDiseaseIds.add(selectedDisease.id);
+      answers.push(buildDiseaseAnswer(selectedDisease, diseases));
+      strongestKind = strongestKind === "fallback" ? "disease" : strongestKind;
+      continue;
+    }
+
+    const fuse = new Fuse(diseases, {
+      keys: ["name", "aliases", "vaccines.name", "vaccines.type", "category", "severity"],
+      includeScore: true,
+      threshold: 0.4,
+      ignoreLocation: true,
+      minMatchCharLength: 2
+    });
+
+    const fuzzy = fuse.search(segment, { limit: 1 })[0];
+    if (fuzzy && (fuzzy.score ?? 1) <= 0.55) {
+      matchedDiseaseIds.add(fuzzy.item.id);
+      answers.push(buildDiseaseAnswer(fuzzy.item, diseases));
+      strongestKind = strongestKind === "fallback" ? "disease" : strongestKind;
+      continue;
+    }
+
+    answers.push(
+      "I could not confidently map that request. Try asking with disease names like polio, measles, covid, rabies, or ask for travel recommendations."
+    );
+  }
+
+  const joined = answers.join("\n\n");
+  const llmAnswer = await maybeGenerateLlmResponse({
+    userMessage: message,
+    baselineAnswer: joined,
+    history: historyMessages
+  });
+
+  const outputKind: AssistantKind = segments.length > 1 ? "multi" : strongestKind;
+
+  return {
+    answer: llmAnswer ?? joined,
+    kind: outputKind,
+    disease: undefined,
+    score: null,
+    matchedDiseaseIds: [...matchedDiseaseIds]
+  };
+}
+
+export async function GET(request: NextRequest) {
+  const authSession = await getAuthSession();
+  const currentUserId = authSession?.user?.id ?? null;
+  const sessionId = sanitizeSessionId(request.nextUrl.searchParams.get("sessionId"));
+  const historyLimit = getBoundedHistoryLimit(request);
+
+  if (!sessionId) {
+    return NextResponse.json({ sessionId: null, introMessage: INTRO_MESSAGE, messages: [] }, { status: 200 });
+  }
+
+  try {
     const session = await prisma.chatSession.findUnique({
       where: {
         id: sessionId
@@ -349,13 +460,17 @@ export async function GET(request: NextRequest) {
           orderBy: {
             createdAt: "asc"
           },
-          take: 200
+          take: historyLimit
         }
       }
     });
 
     if (!session) {
       return NextResponse.json({ sessionId: null, introMessage: INTRO_MESSAGE, messages: [] }, { status: 200 });
+    }
+
+    if (currentUserId && session.userId && session.userId !== currentUserId) {
+      return NextResponse.json({ message: "Unauthorized chat session access." }, { status: 403 });
     }
 
     return NextResponse.json(
@@ -372,15 +487,33 @@ export async function GET(request: NextRequest) {
       { status: 200 }
     );
   } catch (error) {
-    console.error("Chat history API failed", error);
-    return NextResponse.json(
-      { message: "Unable to load chat history." },
-      { status: 500 }
-    );
+    await logServerError({
+      path: request.nextUrl.pathname,
+      method: "GET",
+      message: error instanceof Error ? error.message : "Chat history API failed",
+      stack: error instanceof Error ? error.stack : null,
+      metadata: {
+        sessionId,
+        historyLimit
+      }
+    });
+
+    return NextResponse.json({ message: "Unable to load chat history." }, { status: 500 });
   }
 }
 
 export async function POST(request: NextRequest) {
+  const apiGuard = await guardApiRequest(request, {
+    endpoint: "/api/chat"
+  });
+
+  if (!apiGuard.ok) {
+    return apiGuard.response;
+  }
+
+  const authSession = await getAuthSession();
+  const currentUserId = authSession?.user?.id ?? apiGuard.context.userId ?? null;
+
   let message = "";
   let incomingSessionId: string | null = null;
 
@@ -389,31 +522,85 @@ export async function POST(request: NextRequest) {
     message = body.message?.trim() ?? "";
     incomingSessionId = sanitizeSessionId(body.sessionId);
   } catch {
-    return NextResponse.json(
-      { message: "Invalid JSON payload." },
-      { status: 400 }
-    );
+    return NextResponse.json({ message: "Invalid JSON payload." }, { status: 400 });
   }
 
+  const finalize = async (body: unknown, status: number) => {
+    await trackApiUsage({
+      endpoint: "/api/chat",
+      method: "POST",
+      statusCode: status,
+      apiKeyId: apiGuard.context.apiKeyId,
+      ipAddress: apiGuard.context.ipAddress
+    });
+
+    return NextResponse.json(body, {
+      status,
+      headers: {
+        "x-rate-limit-remaining": String(apiGuard.rateLimit.remaining),
+        "x-rate-limit-reset": String(apiGuard.rateLimit.resetAt)
+      }
+    });
+  };
+
   if (!message) {
-    return NextResponse.json(
-      { message: "Message is required." },
-      { status: 400 }
-    );
+    return finalize({ message: "Message is required." }, 400);
   }
 
   try {
     const diseases = (await prisma.disease.findMany({
-      include: {
-        vaccines: true
+      select: {
+        id: true,
+        name: true,
+        aliases: true,
+        category: true,
+        severity: true,
+        mandatory: true,
+        vaccines: {
+          select: {
+            id: true,
+            name: true,
+            type: true,
+            doses: true,
+            dosageSchedule: true,
+            ageGroup: true,
+            sideEffects: true,
+            vaccineType: true,
+            coveragePercent: true,
+            region: true,
+            introductionYear: true
+          }
+        }
       },
       orderBy: {
         name: "asc"
       }
-    })) as DiseaseRecord[];
+    })) as SearchDiseaseRecord[];
 
-    const assistant = buildAssistantPayload(message, diseases);
-    const session = await getOrCreateSession(incomingSessionId);
+    const session = await getOrCreateSession(incomingSessionId, currentUserId);
+
+    const history = await prisma.chatMessage.findMany({
+      where: {
+        sessionId: session.id
+      },
+      orderBy: {
+        createdAt: "desc"
+      },
+      take: 8,
+      select: {
+        role: true,
+        content: true
+      }
+    });
+
+    const assistant = await buildAssistantPayload(
+      message,
+      diseases,
+      history.reverse().map((entry) => ({
+        role: entry.role,
+        content: entry.content
+      }))
+    );
 
     await prisma.$transaction([
       prisma.chatMessage.create({
@@ -436,18 +623,32 @@ export async function POST(request: NextRequest) {
       })
     ]);
 
-    return NextResponse.json(
+    await recordSearchLog({
+      query: message,
+      region: extractRegionHint(message),
+      userId: currentUserId,
+      diseaseIds: assistant.matchedDiseaseIds ?? []
+    });
+
+    return finalize(
       {
-        ...assistant,
+        answer: assistant.answer,
+        kind: assistant.kind,
         sessionId: session.id
       },
-      { status: 200 }
+      200
     );
   } catch (error) {
-    console.error("Chat API failed", error);
-    return NextResponse.json(
-      { message: "Unable to process chatbot request." },
-      { status: 500 }
-    );
+    await logServerError({
+      path: request.nextUrl.pathname,
+      method: "POST",
+      message: error instanceof Error ? error.message : "Chat API failed",
+      stack: error instanceof Error ? error.stack : null,
+      metadata: {
+        hasSessionId: Boolean(incomingSessionId)
+      }
+    });
+
+    return finalize({ message: "Unable to process chatbot request." }, 500);
   }
 }
