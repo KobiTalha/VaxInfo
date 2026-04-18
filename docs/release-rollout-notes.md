@@ -11,3 +11,9 @@
 - Validate authenticated flows (`/auth/signin`, `/api/user/*`) against production session storage.
 - Confirm API key lifecycle actions (`create`, `rotate`, `revoke`, `activate`, `delete`) in `/developers`.
 - Monitor `ErrorLog` inserts for the first 24 hours after release.
+
+## Wave 3
+
+- Enable optional Redis cache only after baseline latency is established.
+- Keep `VAXINFO_ENABLE_LLM=false` during first production stabilization window.
+- Schedule a post-release review for database index usage and slow query logs.
