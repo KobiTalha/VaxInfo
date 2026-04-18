@@ -30,10 +30,10 @@ type ChatHistoryResponse = {
 };
 
 const STARTER_PROMPTS = [
-  "polio vaccine details",
-  "related diseases for measles",
-  "top vaccine coverage",
-  "coverage in Africa"
+  "measles and polio vaccines",
+  "why is MMR important?",
+  "child vaccination schedule",
+  "travel vaccines for Africa"
 ];
 
 const CHAT_SESSION_STORAGE_KEY = "vaxinfo-chat-session-id";
@@ -78,7 +78,7 @@ export default function AiChatbot() {
     const loadHistory = async () => {
       setIsLoadingHistory(true);
       try {
-        const response = await fetch(`/api/chat?sessionId=${encodeURIComponent(storedSessionId)}`, {
+        const response = await fetch(`/api/chat?sessionId=${encodeURIComponent(storedSessionId)}&limit=60`, {
           method: "GET",
           cache: "no-store",
           signal: controller.signal
