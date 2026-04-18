@@ -1,8 +1,20 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "buildCommand": "npm run build",
-  "installCommand": "npm install",
+  "buildCommand": "npm run vercel:build",
+  "installCommand": "npm ci",
   "env": {
     "NEXT_TELEMETRY_DISABLED": "1"
+  },
+  "functions": {
+    "app/api/chat/route.ts": {
+      "maxDuration": 30
+    },
+    "app/api/dashboard/export/route.ts": {
+      "maxDuration": 30
+    },
+    "app/api/search/route.ts": {
+      "maxDuration": 20
+    }
   }
 }
