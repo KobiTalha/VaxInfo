@@ -1,245 +1,221 @@
 # VaxInfo
 
-AI-powered vaccine intelligence platform with smart search, chatbot, analytics dashboard, and public API built using Next.js, Prisma, and PostgreSQL.
+Production-grade vaccine intelligence platform built with Next.js (App Router), TypeScript, Prisma, and PostgreSQL.
 
-A production-ready system designed with real-world engineering practices.
+VaxInfo now includes intelligent multi-disease search, context-aware chatbot flows, advanced analytics, authentication, API key platform controls, exports, testing, and CI/CD.
 
-## Live Demo
+## Release Snapshot (2026-04-19)
 
-- App: https://vaxinfo.vercel.app
-- Dashboard: https://vaxinfo.vercel.app/dashboard
-- Search API: https://vaxinfo.vercel.app/api/search?disease=polio
-- Vaccines API: https://vaxinfo.vercel.app/api/vaccines
-- Health API: https://vaxinfo.vercel.app/api/health
+- Production deployment defaults updated for Vercel + Supabase.
+- API key lifecycle now supports create, rotate, revoke, activate, and delete.
+- Added DB-backed transactional route tests for developer key flows.
 
-## Features
+## Core Capabilities
 
-### Search Engine
+- Intelligent Search
+- Multi-disease query support (`measles and polio vaccines`)
+- Intent detection (`search`, `explanation`, `recommendation`, `analytics`)
+- Recommendation generation (child schedule, travel)
+- Severity and mandatory tagging
+- Search log persistence and trend analytics
 
-- Multi-stage matching (exact -> alias -> fuzzy)
-- Fuse.js typo tolerance and ranking
-- Match metadata (`matchType`, `score`) in API responses
-- Related disease discovery from shared vaccine associations
+- AI Chatbot
+- Context-aware responses using recent chat history
+- Multi-question handling
+- Explanation mode (`Why is MMR important?`)
+- Optional LLM enhancement via environment flags
+- Bounded history retrieval and user-linked sessions
 
-### AI Chatbot
+- Analytics + Dashboard
+- Most searched diseases and query trends over time
+- Region demand analytics
+- Export dashboard data as CSV/PDF
+- Shareable dashboard state by URL
+- Personalized dashboard preference and saved diseases
 
-- Natural language disease and analytics queries
-- Intent routing (greeting, disease, analytics, fallback)
-- Persistent session memory backed by PostgreSQL
-- Session resume via `sessionId`
+- API Platform
+- API key creation/listing for signed-in users
+- Rate limiting for anonymous and key-based traffic
+- API usage tracking per endpoint
+- Developer documentation page (`/developers`)
+- Embeddable widget page (`/embed`)
 
-### Dashboard
+- Auth + User Features
+- NextAuth credentials login
+- Registration endpoint
+- User-specific saved diseases
+- User-specific chat session ownership
+- User dashboard preference persistence
 
-- WHO-style analytics with region filters
-- Coverage segmentation and category distribution
-- Vaccine introduction timeline
-- Top coverage vaccine leaderboard
+- DevOps + Reliability
+- Health endpoint with DB connectivity checks
+- Structured server error logging to DB
+- Vitest test setup (`npm test`)
+- GitHub Actions CI + optional Vercel deploy pipeline
 
-### API
+## Updated Data Model
 
-- Public search endpoint for disease lookup
-- Public vaccine dataset endpoint
-- Chat API with session persistence
-- Health check endpoint for uptime monitoring
+Key model upgrades include:
 
-## Tech Stack
+- `Disease`: `severity`, `mandatory`
+- `Vaccine`: `sideEffects`, `dosageSchedule`, `ageGroup`, `vaccineType`
+- `SearchLog`: query/event analytics persistence
+- Auth models: `User`, `Account`, `Session`, `VerificationToken`
+- User features: `SavedDisease`, `UserDashboardPreference`
+- API platform: `ApiKey`, `ApiUsage`
+- Reliability: `ErrorLog`
 
-### Frontend
+See [prisma/schema.prisma](prisma/schema.prisma) and migration [prisma/migrations/20260419090000_production_upgrade_core/migration.sql](prisma/migrations/20260419090000_production_upgrade_core/migration.sql).
 
-- Next.js (App Router)
-- TypeScript
-- Tailwind CSS
-- Framer Motion
+## API Endpoints
 
-### Backend
+- Public/Platform
+- `GET /api/search?disease=<query>&page=1&pageSize=10`
+- `GET /api/vaccines?page=1&pageSize=50&region=<region>&category=<category>`
+- `GET /api/analytics?days=30`
+- `GET /api/dashboard/export?format=csv|pdf&region=<region>`
+- `GET /api/health`
 
-- Next.js Route Handlers
-- Prisma ORM
-- Fuse.js
+- Chat
+- `POST /api/chat`
+- `GET /api/chat?sessionId=<id>&limit=60`
 
-### Database
+- Auth
+- `POST /api/auth/register`
+- `GET/POST /api/auth/[...nextauth]`
 
-- PostgreSQL (Supabase)
+- User
+- `GET/POST/DELETE /api/user/saved-diseases`
+- `GET/PUT /api/user/dashboard-preference`
+- `GET /api/user/chats`
 
-### Deployment
+- Developer
+- `GET/POST/PATCH/DELETE /api/developer/keys`
+- `GET /api/developer/usage`
 
-- Vercel
+## Local Setup
 
-## 🧠 Architecture & Data Flow
-
-```text
-User Input
-  ↓
-Alias Normalization Layer
-  ↓
-Fuzzy Search Engine (Fuse.js)
-  ↓
-Ranking & Scoring
-  ↓
-Prisma ORM
-  ↓
-PostgreSQL Database (Supabase)
-  ↓
-Structured API Response
-```
-
-## 🚧 Challenges Solved
-
-- Handling ambiguous disease queries using alias normalization
-- Designing efficient fuzzy search with ranking logic
-- Managing persistent chat sessions without performance degradation
-- Structuring WHO-style relational dataset
-- Ensuring production-ready deployment with environment configs
-
-## ⚡ System Highlights
-
-- Custom-built search pipeline (not library-only logic)
-- Stateful chatbot with database-backed memory
-- Public API architecture
-- Production deployment with cloud database
-
-## ⚡ Performance Considerations
-
-- Indexed database queries for fast lookup
-- Limited chat history retrieval for efficiency
-- Used connection pooling via Supabase
-- Optimized API responses for minimal payload
-
-## 📈 System Metrics
-
-- 100+ structured records across disease and vaccine entities
-- Sub-100ms search response time in optimized query paths
-- Persistent chat sessions with real-time retrieval
-
-## API Documentation
-
-### Example Request
-
-`GET /api/search?disease=measles`
-
-### Example Response
-
-```json
-{
-  "disease": "Measles",
-  "vaccines": ["MMR"],
-  "matchType": "fuzzy",
-  "score": 0.02
-}
-```
-
-### Additional Endpoint Notes
-
-- `GET /api/vaccines`: returns full enriched disease-vaccine dataset.
-- `POST /api/chat`: processes conversational query and returns structured answer + `sessionId`.
-- `GET /api/chat?sessionId=<id>`: returns persisted chat history.
-- `GET /api/health`: returns `{ "status": "ok" }`.
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 20+
-- npm
-- PostgreSQL (local or Supabase)
-
-### Local Setup
+1. Install dependencies:
 
 ```bash
-git clone https://github.com/KobiTalha/VaxInfo
-cd VaxInfo
 npm install
+```
+
+2. Configure environment:
+
+```bash
 copy .env.example .env
+```
+
+3. Run migrations and seed:
+
+```bash
 npx prisma migrate dev
 npm run prisma:seed
+```
+
+4. Start dev server:
+
+```bash
 npm run dev
 ```
 
-### Validation
+## Scripts
 
 ```bash
+npm run dev
 npm run lint
+npm test
+npm run test:db
 npm run build
-```
-
-## Environment Variables
-
-```env
-DATABASE_URL=
-DIRECT_URL=
-NEXT_PUBLIC_APP_URL=
-```
-
-- `DATABASE_URL`: pooled runtime DB connection string
-- `DIRECT_URL`: direct migration DB connection string
-- `NEXT_PUBLIC_APP_URL`: public app base URL
-
-## Deployment
-
-### Supabase
-
-1. Create a Supabase project.
-2. Copy pooled and direct PostgreSQL URLs.
-3. Apply migrations and seed:
-
-```bash
-npx prisma migrate deploy
+npm run vercel:build
+npm run prisma:migrate
+npm run prisma:migrate:deploy
 npm run prisma:seed
 ```
 
-### Vercel
+## Vercel + Supabase Deployment
 
-1. Import repository in Vercel.
-2. Set `DATABASE_URL`, `DIRECT_URL`, and `NEXT_PUBLIC_APP_URL`.
-3. Deploy:
+1. Create a Supabase project and collect:
+- Project ref
+- Database password
+- Pooler host (port `6543`)
+- Direct host (`db.<project-ref>.supabase.co`, port `5432`)
+
+2. Use the production env template:
 
 ```bash
-npx vercel --prod
+copy .env.supabase.example .env
 ```
 
-## Folder Structure
+3. In Vercel Project Settings -> Environment Variables, set:
+- `DATABASE_URL` (Supabase pooler URL)
+- `DIRECT_URL` (Supabase direct URL)
+- `NEXTAUTH_SECRET`
+- `NEXTAUTH_URL`
+- `NEXT_PUBLIC_APP_URL`
 
-```text
-VaxInfo/
-  app/
-    api/
-      chat/
-      health/
-      search/
-      vaccines/
-    dashboard/
-  components/
-    chat/
-    dashboard/
-    search/
-    ui/
-  lib/
-    prisma.ts
-    utils.ts
-  prisma/
-    migrations/
-    schema.prisma
-    seed.ts
+4. Run migrations against Supabase before or during deployment:
+
+```bash
+npm run prisma:migrate:deploy
 ```
 
-## Status
+5. Deploy:
 
-- [x] Fully deployed
-- [x] Production-ready
-- [x] Public API available
-- [x] Persistent chatbot system implemented
+```bash
+npm run deploy:vercel
+```
 
-## Future Improvements
+## Testing
 
-- User-authenticated chat ownership
-- API rate limiting and API key support
-- Dashboard exports (CSV/PDF)
-- Multilingual alias support
+Vitest configuration is in [vitest.config.ts](vitest.config.ts).
+
+- Unit tests: [tests/unit/search-intelligence.test.ts](tests/unit/search-intelligence.test.ts), [tests/unit/password.test.ts](tests/unit/password.test.ts)
+- Integration-style tests: [tests/integration/search-flow.integration.test.ts](tests/integration/search-flow.integration.test.ts)
+- DB-backed transactional route tests: [tests/integration/db/developer-keys-lifecycle.db.test.ts](tests/integration/db/developer-keys-lifecycle.db.test.ts)
+
+Run all tests with:
+
+```bash
+npm test
+```
+
+Run DB-backed route integration tests (requires `TEST_DATABASE_URL`):
+
+```bash
+npm run test:db
+```
+
+## CI/CD
+
+GitHub Actions workflow:
+
+- [ .github/workflows/ci.yml ](.github/workflows/ci.yml)
+
+Pipeline stages:
+
+- Install dependencies
+- Lint
+- Test
+- DB-backed integration tests (Postgres service)
+- Build
+- Optional Prisma production migration during deploy job when `DIRECT_URL` secret is set
+- Optional Vercel deploy on `main` if secrets are configured
+
+## Developer UX
+
+- API docs UI: `/developers`
+- Embeddable vaccine search widget: `/embed`
+- Sign-in/register UI: `/auth/signin`
+
+## Notes
+
+- Redis caching is optional. If Redis env vars are absent, the platform uses in-memory cache fallback.
+- LLM integration is optional and controlled by `VAXINFO_ENABLE_LLM=true` plus OpenAI-compatible env vars.
+- The seed script prints demo credentials and demo API key for local development.
+- Use `.env.supabase.example` for production Vercel + Supabase environment setup.
 
 ## License
 
 MIT
-
-## Disclaimer
-
-VaxInfo is for informational and engineering demonstration purposes only and is not a substitute for professional medical advice.
