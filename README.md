@@ -12,10 +12,6 @@ A production-ready system designed with real-world engineering practices.
 - Vaccines API: https://vaxinfo.vercel.app/api/vaccines
 - Health API: https://vaxinfo.vercel.app/api/health
 
-## 🎬 Demo
-
-![Demo](./public/demo.gif)
-
 ## Features
 
 ### Search Engine
