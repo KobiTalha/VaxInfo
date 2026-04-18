@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "VaxInfo | Medical Vaccine Lookup",
+  title: "VaxInfo | Vaccine Intelligence Platform",
   description:
-    "Lightning-fast disease vaccine lookup system with WHO-structured categories and typo-tolerant search."
+    "Production-grade vaccine intelligence platform with intelligent search, analytics, chatbot memory, developer APIs, and export tooling."
 };
 
 export default function RootLayout({
