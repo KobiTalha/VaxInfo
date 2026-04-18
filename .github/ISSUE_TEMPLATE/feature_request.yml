@@ -1,0 +1,50 @@
+name: Feature Request
+description: Propose an enhancement for VaxInfo
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Suggest improvements that deliver clear user or platform value.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What pain point are you trying to solve?
+      placeholder: Users cannot export dashboard metrics for reporting.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Describe the desired behavior and implementation direction.
+      placeholder: Add CSV export action for dashboard cards and tables.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: List alternatives and why they were rejected.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Product Area
+      options:
+        - Search Engine
+        - AI Chatbot
+        - Dashboard
+        - API
+        - Database
+        - DevOps / Deployment
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Expected Impact
+      description: Performance, UX, maintainability, or business impact.
+      placeholder: Reduces manual analytics workflows for health teams.

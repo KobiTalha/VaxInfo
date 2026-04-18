@@ -1,0 +1,66 @@
+name: Bug Report
+description: Report a reproducible defect in VaxInfo
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please provide enough detail to reproduce and verify a fix.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Briefly describe the issue.
+      placeholder: Search returns no results for a known disease alias.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Include exact steps, API calls, and input values.
+      placeholder: |
+        1. Open /dashboard
+        2. Select region "Africa"
+        3. Submit query "polio"
+        4. Observe error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      placeholder: The API should return a valid disease match and vaccine metadata.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      placeholder: The UI shows a fallback message and the API returns status 500.
+    validations:
+      required: true
+  - type: input
+    id: app_version
+    attributes:
+      label: App Version / Commit
+      description: Provide release tag or commit hash if known.
+      placeholder: v1.0.0 or 3e10d34
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Production (Vercel)
+        - Local Development
+        - Staging
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Screenshots
+      description: Paste stack traces, request/response snippets, or screenshots.
+      render: shell
